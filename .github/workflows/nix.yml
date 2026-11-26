@@ -60,6 +60,8 @@ jobs:
           nix build --print-build-logs -o result .#dependency-cruiser
       - name: Run the sandbox conformance check
         run: ./scripts/sandbox-conformance.sh "${{ matrix.system }}"
+      - name: The shipped wrapper reports its version
+        run: ./result/bin/depcruise --version | grep -E '^[0-9]+\.'
       - name: TypeScript support is bundled
         run: |
           set -euo pipefail

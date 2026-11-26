@@ -27,13 +27,17 @@
           };
         };
 
-      cwdGuard = ''
+      cwdGuard = name: ''
         safe_cwd() {
           case "$1" in
-            "" | / | "$HOME") return 1 ;;
+            "" | / | "$HOME" | "''${HOME%/}") return 1 ;;
             *[!A-Za-z0-9_/.-]*) return 1 ;;
           esac
           return 0
+        }
+        refuse_cwd() {
+          echo "${name}: refusing to run: working directory '$1' is not a plain path in [A-Za-z0-9_/.-]" >&2
+          exit 1
         }
       '';
 
@@ -60,7 +64,6 @@
             (subpath "/System")
             (subpath "/Library")
             (subpath "/private/etc")
-            (subpath "/private/tmp")
             (subpath "/private/var/db/dyld")
             (subpath "/private/var/db/timezone"))
         (allow file-map-executable (subpath "/nix"))
@@ -73,7 +76,6 @@
             (literal "/dev/zero")
             (literal "/dev/random")
             (literal "/dev/urandom"))
-        (allow file-write* (subpath "/private/tmp"))
       '';
 
       mkSandbox = pkgs: { name, binary, cwdMode }:
@@ -82,34 +84,26 @@
           requireCwd = cwdMode == "required";
           linuxCwd = if requireCwd then ''
             real="$(pwd -P)"
-            safe_cwd "$real" || {
-              echo "${name}: refusing to run: working directory '$real' is not a plain path in [A-Za-z0-9_/.-]" >&2
-              exit 1
-            }
+            safe_cwd "$real" || refuse_cwd "$real"
             binds=(--ro-bind "$real" "$real" --chdir "$real")
-            [ "$real" != "$PWD" ] && safe_cwd "$PWD" && binds+=(--ro-bind "$real" "$PWD")
           '' else ''
+            real="$(pwd -P)"
             binds=()
-            safe_cwd "$PWD" && binds=(--ro-bind "$PWD" "$PWD" --chdir "$PWD")
+            safe_cwd "$real" && binds=(--ro-bind "$real" "$real" --chdir "$real")
           '';
           darwinCwd = if requireCwd then ''
             real="$(pwd -P)"
-            safe_cwd "$real" || {
-              echo "${name}: refusing to run: working directory '$real' is not a plain path in [A-Za-z0-9_/.-]" >&2
-              exit 1
-            }
+            safe_cwd "$real" || refuse_cwd "$real"
             cwdRules=" (subpath \"$real\")"
-            [ "$real" != "$PWD" ] && safe_cwd "$PWD" && cwdRules="$cwdRules (subpath \"$PWD\")"
           '' else ''
-            cwdRules=""
-            safe_cwd "$PWD" && cwdRules=" (subpath \"$PWD\")"
             real="$(pwd -P)"
-            [ "$real" != "$PWD" ] && safe_cwd "$real" && cwdRules="$cwdRules (subpath \"$real\")"
+            cwdRules=""
+            safe_cwd "$real" && cwdRules=" (subpath \"$real\")"
           '';
         in
         if pkgs.stdenv.hostPlatform.isLinux then
           pkgs.writeShellScriptBin name ''
-            ${cwdGuard}
+            ${cwdGuard name}
             ${linuxCwd}
             exec ${pkgs.bubblewrap}/bin/bwrap \
               --ro-bind /nix/store /nix/store \
@@ -121,18 +115,20 @@
           ''
         else if pkgs.stdenv.hostPlatform.isDarwin then
           pkgs.writeShellScriptBin name ''
-            ${cwdGuard}
+            ${cwdGuard name}
             ${darwinCwd}
+            sandbox_tmp="$(mktemp -d)"
+            err="$(mktemp "''${TMPDIR:-/tmp}/${name}.XXXXXX")"
+            trap 'rm -rf "$sandbox_tmp"; rm -f "$err"' EXIT INT TERM
             profile=$(cat ${seatbelt pkgs})
-            profile="$profile
+            [ -n "$cwdRules" ] && profile="$profile
             (allow file-read*$cwdRules)"
-            export TMPDIR=/private/tmp
-            err=$(mktemp "$TMPDIR/${name}.XXXXXX")
-            /usr/bin/env -i HOME="$TMPDIR" TMPDIR="$TMPDIR" LANG=C.UTF-8 PATH=${nodePath} \
+            profile="$profile
+            (allow file-read* file-write* (subpath \"$sandbox_tmp\"))"
+            /usr/bin/env -i HOME="$sandbox_tmp" TMPDIR="$sandbox_tmp" LANG=C.UTF-8 PATH=${nodePath} \
               /usr/bin/sandbox-exec -p "$profile" -- ${binary} "$@" 2>"$err"
             status=$?
             grep -vF 'sandbox-exec is deprecated' "$err" >&2
-            rm -f "$err"
             exit $status
           ''
         else
@@ -166,6 +162,11 @@
             name = "sandbox-probe";
             binary = "${raw}/bin/sandbox-probe";
             cwdMode = "optional";
+          };
+          sandbox-probe-required = mkSandbox pkgs {
+            name = "sandbox-probe-required";
+            binary = "${raw}/bin/sandbox-probe";
+            cwdMode = "required";
           };
         });
     };
