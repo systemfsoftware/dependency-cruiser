@@ -1,0 +1,87 @@
+name: nix
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build · ${{ matrix.system }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@v23
+        with:
+          extra-conf: |
+            access-tokens = github.com=${{ github.token }}
+      - name: Evaluate the package for every supported system
+        run: |
+          set -euo pipefail
+          for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
+            nix eval --raw ".#packages.${system}.dependency-cruiser.drvPath" > /dev/null
+            nix eval --raw ".#packages.${system}.default.drvPath" > /dev/null
+          done
+      - name: Build
+        run: nix build .#dependency-cruiser --print-build-logs
+      - name: TypeScript support is bundled
+        run: |
+          set -euo pipefail
+          ./result/bin/depcruise --info | tee info.txt
+          grep -E '^[[:space:]]*✔ typescript[[:space:]].*typescript@[0-9]' info.txt
+      - name: Parse TypeScript in a project without node_modules
+        run: |
+          set -euo pipefail
+          depcruise="$PWD/result/bin/depcruise"
+          scratch="$(mktemp -d)"
+          cd "$scratch"
+          printf 'import type { T } from "./b.ts";\nimport { v } from "./b.ts";\nexport const x: T = v;\n' > a.ts
+          printf 'export type T = number;\nexport const v: T = 1;\n' > b.ts
+          cat > cfg.cjs <<'EOF'
+          module.exports = {
+            forbidden: [
+              {
+                name: "no-a-to-b-value",
+                severity: "error",
+                from: { path: "^a\\.ts$" },
+                to: { path: "^b\\.ts$", dependencyTypesNot: ["type-only"] },
+              },
+              {
+                name: "no-a-to-b-type",
+                severity: "error",
+                from: { path: "^a\\.ts$" },
+                to: { path: "^b\\.ts$", dependencyTypes: ["type-only"] },
+              },
+            ],
+            options: { tsPreCompilationDeps: true },
+          };
+          EOF
+          test ! -e node_modules
+          status=0
+          "$depcruise" --config cfg.cjs --output-type err a.ts | tee err.txt || status=$?
+          test "$status" -ne 0
+          grep -q 'no-a-to-b-value: a.ts' err.txt
+          grep -q 'no-a-to-b-type: a.ts' err.txt
