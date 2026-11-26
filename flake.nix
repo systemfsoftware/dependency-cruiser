@@ -2,7 +2,7 @@
   description = "dependency-cruiser, built with its TypeScript parser bundled";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
   };
 
   outputs = { self, nixpkgs }:
