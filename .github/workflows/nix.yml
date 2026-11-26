@@ -43,10 +43,25 @@ jobs:
           set -euo pipefail
           for system in x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin; do
             nix eval --raw ".#packages.${system}.dependency-cruiser.drvPath" > /dev/null
+            nix eval --raw ".#packages.${system}.dependency-cruiser-unwrapped.drvPath" > /dev/null
             nix eval --raw ".#packages.${system}.default.drvPath" > /dev/null
           done
-      - name: Build
-        run: nix build .#dependency-cruiser --print-build-logs
+      - name: Permit unprivileged user namespaces for bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Build both outputs
+        run: |
+          set -euo pipefail
+          nix build --no-link --print-build-logs .#dependency-cruiser-unwrapped
+          nix build --print-build-logs -o result .#dependency-cruiser
+      - name: Run the sandbox conformance check
+        run: ./scripts/sandbox-conformance.sh "${{ matrix.system }}"
+      - name: The shipped wrapper reports its version
+        run: ./result/bin/depcruise --version | grep -E '^[0-9]+\.'
       - name: TypeScript support is bundled
         run: |
           set -euo pipefail
