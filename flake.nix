@@ -29,8 +29,9 @@
 
       cwdGuard = name: ''
         safe_cwd() {
+          home_real="$(cd "$HOME" 2>/dev/null && pwd -P)"
           case "$1" in
-            "" | / | "$HOME" | "''${HOME%/}") return 1 ;;
+            "" | / | "$HOME" | "''${HOME%/}" | "$home_real" | "''${home_real%/}") return 1 ;;
             *[!A-Za-z0-9_/.-]*) return 1 ;;
           esac
           return 0
@@ -109,7 +110,7 @@
               --ro-bind /nix/store /nix/store \
               --dev /dev --tmpfs /tmp \
               --unshare-all --new-session --die-with-parent --clearenv \
-              --setenv HOME /tmp --setenv TMPDIR /tmp --setenv LANG C.UTF-8 --setenv PATH ${nodePath} \
+              --setenv HOME /tmp --setenv TMPDIR /tmp --setenv LANG C.UTF-8 --setenv PATH "${nodePath}" \
               "''${binds[@]}" \
               -- ${binary} "$@"
           ''
@@ -117,15 +118,16 @@
           pkgs.writeShellScriptBin name ''
             ${cwdGuard name}
             ${darwinCwd}
-            sandbox_tmp="$(mktemp -d)"
-            err="$(mktemp "''${TMPDIR:-/tmp}/${name}.XXXXXX")"
+            sandbox_tmp="$(mktemp -d /private/tmp/${name}.XXXXXX)"
+            sandbox_tmp="$(cd "$sandbox_tmp" && pwd -P)"
+            err="$(mktemp /private/tmp/${name}-stderr.XXXXXX)"
             trap 'rm -rf "$sandbox_tmp"; rm -f "$err"' EXIT INT TERM
             profile=$(cat ${seatbelt pkgs})
             [ -n "$cwdRules" ] && profile="$profile
             (allow file-read*$cwdRules)"
             profile="$profile
             (allow file-read* file-write* (subpath \"$sandbox_tmp\"))"
-            /usr/bin/env -i HOME="$sandbox_tmp" TMPDIR="$sandbox_tmp" LANG=C.UTF-8 PATH=${nodePath} \
+            /usr/bin/env -i HOME="$sandbox_tmp" TMPDIR="$sandbox_tmp" LANG=C.UTF-8 PATH="${nodePath}" \
               /usr/bin/sandbox-exec -p "$profile" -- ${binary} "$@" 2>"$err"
             status=$?
             grep -vF 'sandbox-exec is deprecated' "$err" >&2

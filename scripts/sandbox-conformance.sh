@@ -72,10 +72,12 @@ expect_line "$control" 'SECRET=[leak]'
 expect_line "$control" CWD_WRITABLE
 expect_line "$control" ETC_READ_OK
 expect_line "$control" USR_READ_OK
+expect_line "$control" TMPDIR_WRITABLE
 [ "$linux" = true ] && expect_line "$control" PROC_READ_OK
-rm -f .sandbox-probe-write
+rm -f .sandbox-probe-write "${TMPDIR:-/tmp}/.sandbox-probe-write"
 
 expect_denied "$(SANDBOX_PROBE_SECRET=leak "$probe_boxed" "$canary" "$port")"
+expect_line "$(SANDBOX_PROBE_SECRET=leak "$probe_boxed" "$canary" "$port")" TMPDIR_WRITABLE
 [ ! -e .sandbox-probe-write ] || fail "the optional sandbox wrote into the working directory"
 expect_denied "$(SANDBOX_PROBE_SECRET=leak "$probe_required" "$canary" "$port")"
 [ ! -e .sandbox-probe-write ] || fail "the required sandbox wrote into the working directory"
@@ -89,7 +91,7 @@ version_rc=$?
 "$unwrapped" --config cfg.cjs --output-type err "$outside" > outside-raw.out 2> outside-raw.err; outside_raw_rc=$?
 set -e
 [ "$version_rc" -eq 0 ] || fail "the shipped wrapper failed --version (exit $version_rc)"
-grep -q '18\.' version.out || fail "the shipped wrapper did not print its version"
+grep -qE '^[0-9]+\.' version.out || fail "the shipped wrapper did not print its version"
 [ "$box_rc" -eq 1 ] || fail "a violating project exited $box_rc through the sandbox, want 1"
 [ "$raw_rc" -eq 1 ] || fail "a violating project exited $raw_rc unwrapped, want 1"
 cmp -s box.out raw.out || fail "the sandboxed stdout differs from the unwrapped stdout"
@@ -97,6 +99,7 @@ cmp -s box.err raw.err || fail "the sandboxed stderr differs from the unwrapped 
 grep -q 'no-a-to-b' box.out || fail "the violation report is missing from stdout"
 [ "$outside_raw_rc" -eq 0 ] || fail "the unwrapped depcruise could not read a path outside the working directory (exit $outside_raw_rc)"
 [ "$outside_rc" -ne 0 ] || fail "the sandboxed depcruise reached a path outside the working directory"
+[ -s outside.err ] || fail "the sandboxed depcruise failed outside the working directory without an error"
 
 unsafe="$work/unsafe directory"
 mkdir -p "$unsafe"
